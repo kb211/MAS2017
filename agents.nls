@@ -1,0 +1,335 @@
+buses-own [
+  ; Static, read-only variables. These values never change. You can read them, but you cannot change them.
+  bus_id          ; The ID of a given agent (bus). Each agent has a unique ID.
+  bus_type        ; The type of a given agent (bus). 1 means "small", 2 means "medium" and 3 means "large".
+    
+  ; Dynamic, read-only variables. These values may change over time. You can read them, but you cannot change them.
+  inbox           ; List containing all the incoming messages (a given message is a list like this [tick sender message]).
+  bus_passengers  ; List containing all the passengers that the agent (bus) is currently carrying (represented as a list like this [passenger_id bus_stop]).
+  previous_stop   ; ID of the last bus stop that the agent (bus) visited (-1 means that the agent has not visited any bus stop yet).
+  current_stop    ; ID of the bus stop where the agent (bus) currently is (-1 means that the agent is not at any bus stop).
+  next_stop       ; ID of the bus stop the agent (bus) is traveling to (-1 means that the agent is not travelling to any bus stop).
+  ; New local variables for students.
+  ; You can create any new local variable you want. Just declare them here.
+  capacity
+  next_route_index
+  bus_route
+  cost_graph
+  bus_stop_coordinates
+  manager_id
+  
+  ;manager variables
+  passengers_left_behind
+  last_bus_count
+  workers
+  request_list
+  
+  ;worker variables
+  current_status
+]
+ 
+globals [graph]
+
+to init-buses
+  ; Initialize your agents here.
+  ; This list contains the topology of the entire network of bus stops, which is known to all agents. You can use this, for instance, to calculate the shortest path between two bus stops.
+  set graph [[22 15 14] [11 19 23 7] [8] [16 4 20 9] [3 5 10] [4 16 10 17] [8] [1 17 13] [2 6 9] [3 8 20] [4 5 17 13 21] [1 16 17] [20 15 22] [7 10 22 23] [0 23] [0 12 18] [3 5 11] [5 7 10 11] [15] [1 23] [3 9 12 21] [10 20 22] [0 12 13 21] [1 13 14 19]]
+  ;ifelse(bus_id mod 2 = 0) [set bus_route [9 8 2 8 6 8 9 20 21 22 12 15 18 15 0 14 23 19 1 11 17 7 13 10 4 5 16 3]] [set bus_route[16 5 4 10 13 7 17 11 1 19 23 14 0 15 18 15 12 22 21 20 9 8 6 8 2 8 9 3]]
+  ;set next_route_index 1
+  if(bus_type = 1)[
+      set capacity 12
+  ]
+  if(bus_type = 2)[
+      set capacity 60
+  ]
+  if(bus_type = 3)[
+      set capacity 150  
+  ]
+  set cost_graph calculate_graph_cost graph
+  set bus_stop_coordinates get_coordinates
+  set bus_route []
+  ifelse (count buses = 1) [
+    set manager_id bus_id
+    set workers []
+    set request_list []
+    ][
+    set current_status "new"
+    ]
+  
+end
+
+to execute-actions
+  ifelse manager_id = bus_id [
+    management
+    ][
+  if length inbox > 0 [
+     
+    let destination last item 0 inbox
+    
+    set inbox remove-item 0 inbox
+      if current_stop != -1[
+        set bus_route a_star current_stop destination cost_graph bus_stop_coordinates
+      ] 
+    ]
+  set current_status "busy"
+  ]
+  default-behaviour
+   
+end
+
+to-report destination_by_waiting_time [on_bus]
+  let destination item 1 item 0 on_bus 
+  report destination  
+end
+
+to-report calculate_graph_cost [stop_graph]
+  let index 0
+  let dist_list []
+  foreach stop_graph [
+    let loopitem ?
+    let stop_dists []
+    foreach loopitem [
+      let dist get-distance index ?
+      set stop_dists lput dist stop_dists
+      ]
+    set dist_list lput stop_dists dist_list
+    set index index + 1
+    ]
+  report dist_list
+end
+
+to-report get_coordinates
+  let coordinate_list []
+  let list_temp [[][][][][][][][][][][][][][][][][][][][][][][][]]
+  ask bus_stops[
+    let cor_list []
+    set cor_list lput xcor cor_list
+    set cor_list lput ycor cor_list
+    set list_temp replace-item who list_temp cor_list
+  ]
+  set coordinate_list list_temp
+  report coordinate_list  
+end
+
+to-report a_star [start goal dist_list cords]
+  ; create paired list as start of search space: [start, 0]
+  let temp []
+  set temp lput start temp
+  set temp lput 0 temp
+  
+  ; init list of nodes to search from
+  let open_list []
+  set open_list lput temp open_list
+  
+  ; init list to collect path costs
+  let cost_so_far []
+  set cost_so_far lput temp cost_so_far
+  
+  ; init list to collect linked nodes in collected paths
+  let came_from []
+  set temp replace-item 1 temp "None"
+  set came_from lput temp came_from
+  
+  while [length open_list > 0][
+    
+    set open_list sort-by [(runresult task [ item 1 ? ] ?1) < (runresult task [ item 1 ? ] ?2)] open_list
+    let node_current item 0 open_list
+    let current_node item 0 node_current
+    set open_list remove-item 0 open_list
+    
+    ; if path to goal node was found collect and report route
+    if(member? goal map first came_from)[
+        let route []
+        set route fput current_node route
+        while[current_node != start][
+            let link_index position current_node map first came_from
+            set current_node item 1 item link_index came_from
+            set route fput current_node route
+        ]
+        report route
+    ]
+          
+    let successors item current_node graph
+    foreach successors [
+      let next_node ?
+      let next_node_index position next_node successors
+
+      ; get cost of path to current_node (i.e. busstop) from cost_so_far list
+      let current_node_index position current_node map first cost_so_far
+      let current_cost item 1 (item current_node_index cost_so_far)
+      
+      ; get distance between current busstop and next_node (i.e. currently evaluated busstop that connects to current_node)
+      let graph_cost item next_node_index (item current_node dist_list)
+      
+      ; compute cost of path to next_node (i.e. currently evaluated busstop that connects to current_node)
+      let new_cost current_cost + graph_cost
+      
+      ; get earlier collected cost of path for next_node (if in cost_so_far)
+      let next_cost 0
+      let next_cost_index 0
+      if member? next_node map first cost_so_far [
+        set next_cost_index position next_node map first cost_so_far
+        set next_cost item 1 (item next_cost_index cost_so_far)
+      ]
+
+      ; if next_cost is the first or lowest cost collected for next_node add to cost_so_far
+      if not member? next_node map first cost_so_far or new_cost < next_cost[
+        
+        ; create paired list: [next_node, new_cost]
+        let next_cost_so_far []
+        set next_cost_so_far lput next_node next_cost_so_far
+        set next_cost_so_far lput new_cost next_cost_so_far    
+        
+        ; add or replace cost of path to next_node to cost_so_far
+        ifelse member? next_node map first cost_so_far [
+          set cost_so_far replace-item next_cost_index cost_so_far next_cost_so_far     
+          ][
+          set cost_so_far lput next_cost_so_far cost_so_far
+          ]
+        
+        ; compute priority for next_node based on cost of path from start node
+        ; and heuristic estimated cost to goal node
+        let priority new_cost + heuristic goal next_node cords
+        
+        ; create paired list: [next_node, priority]
+        let new_open []
+        set new_open lput next_node new_open
+        set new_open lput priority new_open
+        ; add to list of nodes to consider for search
+        set open_list lput new_open open_list
+        
+        ; create paired list: [next_node, current_id]
+        let new_link []
+        set new_link lput next_node new_link
+        set new_link lput current_node new_link  
+        
+        ; if next_node already visited, replace linked origin node     
+        ifelse member? next_node map first came_from [
+          let came_from_index position next_node map first came_from
+          set came_from replace-item came_from_index came_from new_link     
+          ][
+          set came_from lput new_link came_from
+          ]
+      ]
+    ]
+  ]
+end
+
+to-report heuristic [pointA pointB cords]
+  
+  let coordinatesA item pointA cords
+  let XA item 0 coordinatesA
+  let YA item 1 coordinatesA
+  
+  let coordinatesB item pointB cords
+  let XB item 0 coordinatesB
+  let YB item 1 coordinatesB
+    
+  report abs(XA - XB) + abs(YA - YB)
+end
+
+to management
+   
+   if (count buses < 3) [
+    add-bus 1
+    add-bus 1
+    ]
+   if (last_bus_count < count buses)[
+     let temp_man_id manager_id
+     let temp_worker_list workers
+     
+     ask buses [
+       set manager_id temp_man_id
+       
+       let temp_status_list []
+       set temp_status_list lput bus_id temp_status_list
+       set temp_status_list lput current_status temp_status_list
+         ifelse (not member? temp_status_list temp_worker_list)[
+           set temp_worker_list lput temp_status_list temp_worker_list
+         ][
+           let remove-index position temp_status_list temp_worker_list
+           
+           set temp_worker_list replace-item remove-index temp_worker_list temp_status_list
+         
+         ]
+       ]
+     set workers temp_worker_list
+     
+     ]
+   
+   
+   if length request_list > 0 [
+   foreach request_list[
+     let request ?
+     foreach workers [
+       let worker_status item 1 ? 
+       if worker_status = "new"[
+         let worker_id item 0 ?
+         send-message worker_id item 0 request
+         
+         set request_list remove-item (position request request_list) request_list
+         
+         let temp_worker []
+         set temp_worker lput worker_id temp_worker
+         set temp_worker lput "busy" temp_worker
+         set workers replace-item (position ? workers) workers temp_worker
+         stop
+       ]
+     ]
+   ]
+   ]
+   
+   foreach inbox[
+     let current_message last ?
+     ;let goal_request item 0 last current_message
+     ;let passengers_request item 1 last current_message
+     add-bus 1
+     set request_list lput current_message request_list
+     set inbox remove current_message inbox
+     ]
+   
+end
+
+to default-behaviour
+  ifelse current_stop != -1 [
+    ; Drop-off passengers
+    if(length bus_passengers != 0)[
+      foreach bus_passengers [if (current_stop = item 1 ?) [drop-off-passenger item 0 ?]]  
+    ]
+    
+    ; Pick-up passengers
+    foreach get-passengers-at-stop current_stop [ 
+      ifelse(length bus_passengers < capacity)[ 
+        pick-up-passenger item 0 ? 
+      ][
+        ;count the number of passengers_left behin
+        set passengers_left_behind passengers_left_behind + 1
+      ]
+    ]         
+    if (manager_id != bus_id and manager_id != 0 and passengers_left_behind > 0)[
+          let message []
+          set message lput current_stop message 
+          set message lput passengers_left_behind message
+          ;let message word word current_stop ":" passengers_left_behind 
+          send-message manager_id message
+          set passengers_left_behind 0
+        ]
+    
+    ; Get bus_route and travel-to next stop
+    ifelse(length bus_route > 1)[
+      set bus_route but-first bus_route
+    ][
+      ifelse(length bus_passengers != 0) [
+        ; this ensures that the person that has been on the bus the longest will get priority
+        let destination destination_by_waiting_time bus_passengers
+        set bus_route a_star current_stop destination cost_graph bus_stop_coordinates
+        set bus_route but-first bus_route
+      ][
+      set bus_route [] 
+      set bus_route lput item random length item current_stop graph item current_stop graph bus_route
+      ]
+    ]    
+    travel-to item 0 bus_route    
+  ]
+  [travel-to next_stop] 
+end
