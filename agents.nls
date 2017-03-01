@@ -48,6 +48,7 @@ to init-buses
   set cost_graph calculate_graph_cost graph
   set bus_stop_coordinates get_coordinates
   set bus_route []
+  
   ifelse (count buses = 1) [
     set manager_id bus_id
     set workers []
@@ -234,6 +235,7 @@ to management
     add-bus 1
     add-bus 1
     ]
+   
    if (last_bus_count < count buses)[
      let temp_man_id manager_id
      let temp_worker_list workers
@@ -302,11 +304,13 @@ to default-behaviour
       ifelse(length bus_passengers < capacity)[ 
         pick-up-passenger item 0 ? 
       ][
-        ;count the number of passengers_left behin
+        ;count the number of passengers_left behind
         set passengers_left_behind passengers_left_behind + 1
       ]
     ]         
     if (manager_id != bus_id and manager_id != 0 and passengers_left_behind > 0)[
+      ;should manager also be able to call this?
+      ;start-pickup-bidding passengers_left_behind current_stop
           let message []
           set message lput current_stop message 
           set message lput passengers_left_behind message
@@ -332,4 +336,43 @@ to default-behaviour
     travel-to item 0 bus_route    
   ]
   [travel-to next_stop] 
+end
+
+;Any bus can call this when their capacity has been reached
+;amount_waiting = count of passengers left waiting
+to start-pickup-bidding [amount_waiting waiting_stop]
+  let bidList []
+  let maxBid 5;What is a good value for this???
+  
+  ask buses[
+    let bid 0
+    set bid calculate-pickup-bid amount_waiting waiting_stop
+    set bidList lput bid bidList
+    ;add bus_id to list as well - pair id and bid
+    ]
+  
+  ;Sort bidList low to high
+  set bidList sort bidList
+  print bidList
+  
+  ifelse(item 0 bidList < maxBid)[
+    ;set bid winners route to waiting_stop
+    ][
+      add-bus 1
+      ask bus newest_bus [set bus_route current_stop waiting_stop]
+      ]
+  
+end
+
+;to be called by an individual bus
+to-report calculate-pickup-bid [amount_waiting waiting_stop]
+  let bid 0
+  let available_space capacity - length bus_passengers
+  
+  ifelse(available_space >= amount_waiting)[
+    set bid get-distance current_stop waiting_stop]
+  [
+    set bid 9000  
+  ]
+  report bid
 end
