@@ -66,7 +66,7 @@ to execute-actions
   if length inbox > 0 [
     foreach inbox[
       let current_message last ?
-      if item 0 current_message = "contract"[
+      if item 0 current_message = "contract" and current_status = "idle"[
         
         ;current_message is ["contract" current_stop passengers_left_behind]
         
@@ -85,26 +85,16 @@ to execute-actions
         let destination item 1 current_message
         ifelse current_stop != -1[
           set bus_route a_star current_stop destination cost_graph bus_stop_coordinates
-          print bus_route
           ][
-          
           set bus_route a_star next_stop destination cost_graph bus_stop_coordinates
-          print bus_route
           ]
-        
-        ]
-      ;destination item y
-      ;calcula
-      
+          set current_status "busy"
+        ]    
       ] 
-    let destination last item 0 inbox
-    
-    set inbox remove-item 0 inbox
-;      if current_stop != -1[
-;        set bus_route a_star current_stop destination cost_graph bus_stop_coordinates
-;      ] 
+    let destination last item 0 inbox    
+    set inbox []
     ]
-  set current_status "busy"
+  
   ]
   default-behaviour
    
@@ -145,7 +135,6 @@ to-report get_coordinates
 end
 
 to-report a_star [start goal dist_list cords]
-  print (word "Start" start) 
   ; create paired list as start of search space: [start, 0]
   let temp []
   set temp lput start temp
@@ -279,18 +268,16 @@ to management
        let temp_status_list []
        set temp_status_list lput bus_id temp_status_list
        set temp_status_list lput current_status temp_status_list
-         ifelse (not member? temp_status_list temp_worker_list)[
+         ifelse (not member? first temp_status_list map first temp_worker_list)[
            set temp_worker_list lput temp_status_list temp_worker_list
          ][
-           let remove-index position temp_status_list temp_worker_list
+           let remove-index position first temp_status_list map first temp_worker_list
            
            set temp_worker_list replace-item remove-index temp_worker_list temp_status_list
          
          ]
        ]
      set workers temp_worker_list
-     print workers
-     
      ]
    
    
@@ -319,7 +306,6 @@ to management
          ][
          set request_list lput temp_request request_list
          ]
-       
        ]
 
      if first current_message != "bid"[
@@ -327,7 +313,6 @@ to management
        send-contracts current_message workers       
        ]
 
-     
      set inbox remove ? inbox
      ]
    
@@ -337,18 +322,33 @@ to management
      
    foreach request_list[
      let request ?
+     print "REQUEST"
+     print ticks
+     print request
+     let bid_val item 2 request
      let winner item 1 request
      let winners_message []
      set winners_message lput "request" winners_message
      set winners_message lput item 0 request winners_message
      
-       ;winners_message is ["request" destination_stop]
-       
+     ;winners_message is ["request" destination_stop]
+     
+     ;calculate the distance a new bus would have to travel to the destination
+     let new_bus_route a_star 3 item 0 request cost_graph bus_stop_coordinates
+     let new_bus_cost calculate-route-length new_bus_route
+     
+     ;if the bid winner has a smaller distance to travel to the destination than a new bus would, dont add new bus otherwise add new bus
+     ifelse bid_val < new_bus_cost[  
        ;if the cost of going to the destination is 0 then the bus was already headed there and had the capacity to pickup the passengers
        if item 2 request != 0[
          send-message winner winners_message
          ]
+       ][
+       ;add-bus 1
+       
+       ] 
      ]
+     set request_list [] 
    ]
    
 end
@@ -395,6 +395,7 @@ to default-behaviour
     ifelse(length bus_route > 1)[
       set bus_route but-first bus_route
     ][
+      set current_status "idle"
       ifelse(length bus_passengers != 0) [
         ; this ensures that the person that has been on the bus the longest will get priority
         let destination destination_by_waiting_time bus_passengers
@@ -424,11 +425,8 @@ to-report calculate-pickup-bid [waiting_message]
      let route []
      ifelse current_stop != -1[
           set route a_star current_stop waiting_stop cost_graph bus_stop_coordinates
-          print route
-          ][
-          
+          ][   
           set route a_star next_stop waiting_stop cost_graph bus_stop_coordinates
-          print route
           ]
           
     set bid calculate-route-length route
