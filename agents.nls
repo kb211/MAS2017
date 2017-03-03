@@ -64,13 +64,45 @@ to execute-actions
     management
     ][
   if length inbox > 0 [
-     
+    foreach inbox[
+      let current_message last ?
+      if item 0 current_message = "contract"[
+        
+        ;current_message is ["contract" current_stop passengers_left_behind]
+        
+        let bid_value calculate-pickup-bid current_message
+      
+        let bid_message []
+        set bid_message lput "bid" bid_message
+        set bid_message lput item 1 current_message bid_message;this might change when "request" added
+        set bid_message lput bid_value bid_message
+        ;bid_message is ["bid" current_stop bid_value]
+        
+        send-message manager_id bid_message        
+        
+     ] 
+      if item 0 current_message = "request"[
+        let destination item 1 current_message
+        ifelse current_stop != -1[
+          set bus_route a_star current_stop destination cost_graph bus_stop_coordinates
+          print bus_route
+          ][
+          
+          set bus_route a_star next_stop destination cost_graph bus_stop_coordinates
+          print bus_route
+          ]
+        
+        ]
+      ;destination item y
+      ;calcula
+      
+      ] 
     let destination last item 0 inbox
     
     set inbox remove-item 0 inbox
-      if current_stop != -1[
-        set bus_route a_star current_stop destination cost_graph bus_stop_coordinates
-      ] 
+;      if current_stop != -1[
+;        set bus_route a_star current_stop destination cost_graph bus_stop_coordinates
+;      ] 
     ]
   set current_status "busy"
   ]
@@ -113,6 +145,7 @@ to-report get_coordinates
 end
 
 to-report a_star [start goal dist_list cords]
+  print (word "Start" start) 
   ; create paired list as start of search space: [start, 0]
   let temp []
   set temp lput start temp
@@ -149,7 +182,7 @@ to-report a_star [start goal dist_list cords]
         ]
         report route
     ]
-          
+    ;TODO: getting error with item below when -1 ("not greater than 0")    
     let successors item current_node graph
     foreach successors [
       let next_node ?
@@ -256,40 +289,79 @@ to management
          ]
        ]
      set workers temp_worker_list
+     print workers
      
      ]
    
    
-   if length request_list > 0 [
-   foreach request_list[
-     let request ?
-     foreach workers [
-       let worker_status item 1 ? 
-       if worker_status = "new"[
-         let worker_id item 0 ?
-         send-message worker_id item 0 request
-         
-         set request_list remove-item (position request request_list) request_list
-         
-         let temp_worker []
-         set temp_worker lput worker_id temp_worker
-         set temp_worker lput "busy" temp_worker
-         set workers replace-item (position ? workers) workers temp_worker
-         stop
-       ]
-     ]
-   ]
-   ]
-   
    foreach inbox[
      let current_message last ?
-     ;let goal_request item 0 last current_message
-     ;let passengers_request item 1 last current_message
-     add-bus 1
-     set request_list lput current_message request_list
-     set inbox remove current_message inbox
+     let sender_id item 1 ?
+     if first current_message = "bid"[
+       
+       ;current_message is ["bid" current_stop bid_value]
+       
+       ;create incoming bid with familiar netlogo bs
+       ;temp request is [current_stop sender_id bid_value]
+       let temp_request []
+       set temp_request lput item 1 current_message temp_request
+       set temp_request lput sender_id temp_request
+       set temp_request lput item 2 current_message temp_request       
+       
+       ;if incoming bid is less than previous lowest bid replace with incoming bid
+       ;comparing incoming bid to current lowest bid (if there already is one) for this contract
+       ifelse member? item 1 current_message map first request_list[
+           let temp_position position item 1 current_message map first request_list
+           let current_lowest_bid last item temp_position request_list
+           if last current_message < current_lowest_bid [
+             set request_list replace-item temp_position request_list temp_request
+             ]     
+         ][
+         set request_list lput temp_request request_list
+         ]
+       
+       ]
+
+     if first current_message != "bid"[
+       ;current message is ["request" current_stop passengers_left_behind]
+       send-contracts current_message workers       
+       ]
+
+     
+     set inbox remove ? inbox
      ]
    
+   if length request_list > 0 [
+     
+   ;request_list is [[current_stop sender_id bid_value]...]
+     
+   foreach request_list[
+     let request ?
+     let winner item 1 request
+     let winners_message []
+     set winners_message lput "request" winners_message
+     set winners_message lput item 0 request winners_message
+     
+       ;winners_message is ["request" destination_stop]
+       
+       ;if the cost of going to the destination is 0 then the bus was already headed there and had the capacity to pickup the passengers
+       if item 2 request != 0[
+         send-message winner winners_message
+         ]
+     ]
+   ]
+   
+end
+
+to send-contracts [contract_message workers_]
+  set contract_message replace-item 0 contract_message "contract"
+  ;contract_message is ["contract" current_stop passengers_left_behind]
+  foreach workers_[
+    ; TO-DO: if worker is not busy
+    let worker ?
+    send-message item 0 worker contract_message
+  ]
+
 end
 
 to default-behaviour
@@ -309,13 +381,13 @@ to default-behaviour
       ]
     ]         
     if (manager_id != bus_id and manager_id != 0 and passengers_left_behind > 0)[
-      ;should manager also be able to call this?
-      ;start-pickup-bidding passengers_left_behind current_stop
-          let message []
-          set message lput current_stop message 
-          set message lput passengers_left_behind message
+          ;a worker requests help in message: ["request" current_stop passengers_left_behind]
+          let request_message []
+          set request_message lput "request" request_message
+          set request_message lput current_stop request_message 
+          set request_message lput passengers_left_behind request_message
           ;let message word word current_stop ":" passengers_left_behind 
-          send-message manager_id message
+          send-message manager_id request_message
           set passengers_left_behind 0
         ]
     
@@ -338,41 +410,58 @@ to default-behaviour
   [travel-to next_stop] 
 end
 
-;Any bus can call this when their capacity has been reached
-;amount_waiting = count of passengers left waiting
-to start-pickup-bidding [amount_waiting waiting_stop]
-  let bidList []
-  let maxBid 5;What is a good value for this???
-  
-  ask buses[
-    let bid 0
-    set bid calculate-pickup-bid amount_waiting waiting_stop
-    set bidList lput bid bidList
-    ;add bus_id to list as well - pair id and bid
-    ]
-  
-  ;Sort bidList low to high
-  set bidList sort bidList
-  print bidList
-  
-  ifelse(item 0 bidList < maxBid)[
-    ;set bid winners route to waiting_stop
-    ][
-      add-bus 1
-      ask bus newest_bus [set bus_route current_stop waiting_stop]
-      ]
-  
-end
-
 ;to be called by an individual bus
-to-report calculate-pickup-bid [amount_waiting waiting_stop]
+to-report calculate-pickup-bid [waiting_message]
+  
+  ;waiting_message is ["contract" current_stop passengers_left_behind]
+  
   let bid 0
   let available_space capacity - length bus_passengers
+  let waiting_stop item 1 waiting_message
+  let amount_waiting item 2 waiting_message
   
   ifelse(available_space >= amount_waiting)[
-    set bid get-distance current_stop waiting_stop]
+     let route []
+     ifelse current_stop != -1[
+          set route a_star current_stop waiting_stop cost_graph bus_stop_coordinates
+          print route
+          ][
+          
+          set route a_star next_stop waiting_stop cost_graph bus_stop_coordinates
+          print route
+          ]
+          
+    set bid calculate-route-length route
+    ]
   [
     set bid 9000  
   ]
   report bid
+end
+
+to-report calculate-route-length [route_]
+  
+  if length route_ = 1[
+    ;play the trump card
+    report 0
+    ]
+  let total_cost 0
+  foreach route_ [
+    let this_stop ?
+    let this_index position this_stop route_
+    let upcoming_index this_index + 1
+    
+    let upcoming_stop item upcoming_index route_
+    let ajacent_lengths item this_stop cost_graph
+    
+    let cost_position position upcoming_stop item this_stop graph
+    let cost item cost_position ajacent_lengths
+    
+    set total_cost total_cost + cost
+    if upcoming_stop = last route_[
+      report total_cost
+      ]
+    ]
+  
+  
 end
