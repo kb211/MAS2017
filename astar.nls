@@ -1,5 +1,4 @@
 to-report a_star [start goal dist_list cords]
-  print (word "Start" start) 
   ; create paired list as start of search space: [start, 0]
   let temp []
   set temp lput start temp

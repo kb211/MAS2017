@@ -19,10 +19,10 @@ buses-own [
   cost_graph
   bus_stop_coordinates
   manager_id
-  bus_statuses
+  bus_list
+  leave_at_next_stop
   
   ;manager variables
-  passengers_left_behind
   last_bus_count
   workers
   request_list
@@ -53,110 +53,290 @@ to init-buses
   set cost_graph calculate_graph_cost graph
   set bus_stop_coordinates get_coordinates
   set bus_route []
+  set leave_at_next_stop []
+  set bus_list []
   
   ifelse (count buses = 1) [
     set manager_id bus_id
     set workers []
     set request_list []
     set signed_contracts []
-    ][
+  ][
     set current_status "idle"
-    ]
+  ]
   
 end
 
 to execute-actions
-  ifelse manager_id = bus_id [
-    management
+  ifelse bus_id = manager_id [
+    manager
   ][if length inbox > 0 [
     inbox-messages
   ]]
-  default-behaviour
+  bus-actions
   ; should move somewhere else probably
-  if current_stop = mission_destination[
-    let mission_complete lput "finished" []
-    set mission_complete lput current_stop mission_complete
-    send-message manager_id mission_complete
+  if current_stop = mission_destination [
+    send-message manager_id (list "finished" current_stop)
     set current_status "idle"
     set mission_destination "None"
-    ] 
+  ] 
 end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;                      MANAGER BUS                      ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+to manager
+  if (count buses < 10) [
+    add-bus 1
+    add-bus 2
+    add-bus 3
+  ]
+   
+  if (last_bus_count < count buses)[
+    let temp_manager_id manager_id
+    let temp_workers workers
+    ask buses [
+      let worker (list bus_id current_status)
+      ifelse (not member? first worker map first temp_workers)[
+        set temp_workers lput worker temp_workers
+      ][
+        let index position first worker map first temp_workers
+        set temp_workers replace-item index temp_workers worker
+      ]
+    ]   
+    ask buses [
+       set manager_id temp_manager_id
+       set bus_list map first temp_workers
+    ]
+    set workers temp_workers
+  ]  
+  manager-inbox
+  manager-requests
+end
+
+to manager-inbox   
+  foreach inbox[
+    let message last ?
+    let sender_id item 1 ?
+    
+    ; message is ["bid" bus_stop bid_value surplus_passengers]
+    if first message = "bid"[ 
+      ; request is [bus_stop sender_id bid_value surplus_passengers]
+      let bid (list item 1 message sender_id item 2 message item 3 message)             
+      ; if incoming bid is less than previous lowest bid replace with incoming bid
+      ; comparing incoming bid to current lowest bid (if there already is one) for this contract
+      ifelse member? item 1 message map first request_list[
+        let index position item 1 message map first request_list
+        let current_lowest_bid last item index request_list
+        if item 2 bid < current_lowest_bid [
+          set request_list replace-item index request_list bid
+        ]     
+      ][
+        set request_list lput bid request_list
+      ]
+    ]
+
+    ; message is ["inform-manager" bus_stop surplus_passengers]
+    if first message = "inform-manager"[
+      if not member? item 1 message signed_contracts[ 
+        send-contracts message workers
+      ]       
+    ]
+     
+    if first message = "finished"[
+      set signed_contracts remove last message signed_contracts
+    ]
+  ] 
+  set inbox []
+end
+
+to manager-requests
+  if length request_list > 0 [   
+    ;request_list is [[bus_stop sender_id bid_value surplus_passengers]...]
+    foreach request_list[
+      let bus_stop item 0 ?
+      let winner item 1 ?
+      let bid_value item 2 ?
+      let surplus_passengers item 3 ?
+      ; winners_message is ["request" destination_stop]
+      let winners_message (list "request" bus_stop)
+
+      ;calculate the distance a new bus would have to travel to the destination
+      let new_bus_route a_star 3 bus_stop cost_graph bus_stop_coordinates
+      let new_bus_cost calculate-route-length new_bus_route
+     
+      let add_bus_threshold 4     
+      if (count buses < 101)[
+        set add_bus_threshold 2 
+      ] 
+      if(count buses < 201)[
+        set add_bus_threshold 3
+      ]
+     
+      ; if the bid winner has a smaller distance to travel to the destination than a new bus would, dont add new bus otherwise add new bus
+      ifelse bid_value < new_bus_cost * add_bus_threshold [  
+        ; if the cost of going to the destination is 0 then the bus was already headed there and had the capacity to pickup the passengers
+        if bid_value != 0 [
+          send-message winner winners_message
+          set signed_contracts lput bus_stop signed_contracts 
+        ]
+      ][
+        print count buses
+        ifelse(surplus_passengers < 12)[
+          add-bus 1
+        ][
+          ifelse(surplus_passengers < 50)[
+            add-bus 2
+          ][
+            add-bus 3 
+          ]
+        ]
+      ] 
+    ]
+    set request_list [] 
+  ] 
+end
+
+to send-contracts [contract_message workers_]
+  set contract_message replace-item 0 contract_message "contract"
+  ;contract_message is ["contract" bus_stop surplus_passengers]
+  foreach workers_[
+    ; TO-DO: if worker is not busy
+    let worker ?
+    send-message item 0 worker contract_message
+  ]
+end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;                      BUS ACTIONS                      ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 to inbox-messages 
   foreach inbox[
-      let current_message last ?
-      if item 0 current_message = "contract" and current_status = "idle"[
-        
-        ;current_message is ["contract" current_stop passengers_left_behind]
-        
-        let bid_value calculate-pickup-bid current_message
-      
-        let bid_message []
-        set bid_message lput "bid" bid_message
-        set bid_message lput item 1 current_message bid_message;this might change when "request" added
-        set bid_message lput bid_value bid_message
-        set bid_message lput last current_message bid_message;The number of passengers left behind
-        ;bid_message is ["bid" current_stop bid_value, passengers_left_behind]
-        
-        send-message manager_id bid_message        
-        
-      ] 
-      if item 0 current_message = "request"[
-        set mission_destination item 1 current_message
-        ifelse current_stop != -1[
-          set bus_route a_star current_stop mission_destination cost_graph bus_stop_coordinates
-        ][
-          set bus_route a_star next_stop mission_destination cost_graph bus_stop_coordinates
-        ]
-        set current_status "busy"
-      ]    
-      if item 0 current_message = "inform" [
-        set bus_statuses update-bus-statuses current_message
+    let message last ?
+    
+    ; message is ["contract" bus_stop surplus_passengers]
+    if item 0 message = "contract" and current_status = "idle"[
+      let bid_value calculate-pickup-bid message
+      ;bid_message is ["bid" bus_stop bid_value, surplus_passengers]
+      let bid_message (list "bid" item 1 message bid_value item 2 message)  ; TODO item 2 needed?   
+      send-message manager_id bid_message            
+    ] 
+    
+    if item 0 message = "request"[
+      set mission_destination item 1 message
+      ifelse current_stop != -1 [
+        set bus_route a_star current_stop mission_destination cost_graph bus_stop_coordinates
+      ][
+        set bus_route a_star next_stop mission_destination cost_graph bus_stop_coordinates
       ]
-  ] 
+      set current_status "busy"
+    ]    
+    
+    if item 0 message = "inform" [
+      request-for-passengers message
+    ]
+      
+    if item 0 message = "request-passengers" [
+      set leave_at_next_stop item 1 message
+    ]
+  ]  
   let destination last item 0 inbox    
   set inbox []
 end
 
-to-report update-bus-statuses [status_message]
-  ; status_message = ["inform", bus_id, bus_stop, bus_passengers]
-  let indexes n-values length bus_statuses [ ? ] 
-  (foreach bus_statuses indexes [
-    let bus_status ?1
-    let index ?2
-    foreach bus_status [
-      ; update bus_statuses if new message received
-      if item 0 bus_status = item 1 status_message [
-        set bus_statuses replace-item index bus_statuses (list item 1 status_message item 2 status_message)
-        ; if bus_stop is in one of the next stops for current bus
-        if member? item 2 status_message sublist bus_route 0 1 [
-          ; send request for passengers to be left or dropped off at bus_stop
-          request_for_passengers item 1 status_message item 2 status_message item 3 status_message
+; send request for passengers to be left or dropped off at bus_stop
+to request-for-passengers [ inform_message ]
+  ; inform_message = ["inform" bus_id bus_stop bus_passengers]   if length bus_route > 0 and member? item 2 inform_message sublist bus_route 0 2 [
+    let request []
+    let to_bus_id item 1 inform_message
+    let bus_stop item 2 inform_message
+    let passenger_list item 3 inform_message
+    ; TODO get-passengers-at-stop current_stop
+    ask bus_stops [
+      if bus_stop = position name amsterdam_bus_stops_names and length passengers_waiting > 0 [
+        foreach passengers_waiting [
+          set passenger_list lput ? passenger_list
         ]
       ]
+    ]   
+    foreach passenger_list [
+      if member? item 1 ? bus_route [
+        set request lput item 0 ? request
+      ]
     ]
-  ])
-  report bus_statuses
-end
+    if length request != 0 [
+      send-message to_bus_id (list "request-passengers" request)
+    ] 
+end 
+
+to bus-actions
+  ifelse current_stop != -1 [
     
-to request_for_passengers [to_bus_id bus_stop passenger_list]
-  let request []
-  ask bus_stops [
-    if bus_stop = position name amsterdam_bus_stops_names [
-      set passenger_list lput passengers_waiting passenger_list
+    ; Drop-off passengers
+    if(length bus_passengers != 0)[
+      foreach bus_passengers [
+        ifelse current_stop = item 1 ? [
+          drop-off-passenger item 0 ?
+        ][
+          if not member? item 1 ? bus_route and member? item 0 ? leave_at_next_stop [
+            drop-off-passenger item 0 ? 
+          ]
+        ]
+      ]     
     ]
-  ]
-  ; request for passengers to be dropped off
-  foreach passenger_list [
-    let passenger ?
-    if member? item 1 passenger bus_route [
-      set request lput item 0 passenger request
+    
+    ; Pick-up passengers
+    let surplus_passengers 0
+    foreach get-passengers-at-stop current_stop [ 
+      ifelse length bus_passengers = capacity [
+        ;count the number of passengers_left behind
+        set surplus_passengers surplus_passengers + 1
+      ][
+        if member? item 1 ? bus_route or not member? item 0 ? leave_at_next_stop [ 
+          pick-up-passenger item 0 ? 
+        ]
+      ]
+    ]         
+    if (manager_id != bus_id and manager_id != 0 and surplus_passengers > 0)[
+          ;a worker informs in message: ["inform-manager" current_stop surplus_passengers]
+          let inform_message (list "inform-manager" current_stop surplus_passengers)
+          send-message manager_id inform_message
+        ]
+    
+    ; Get bus_route and travel-to next stop
+    ifelse(length bus_route > 1)[
+      set bus_route but-first bus_route
+    ][
+
+      ifelse(length bus_passengers != 0) [
+        ; this ensures that the person that has been on the bus the longest will get priority
+        let destination destination_by_waiting_time bus_passengers
+        set bus_route a_star current_stop destination cost_graph bus_stop_coordinates
+        set bus_route but-first bus_route
+      ][
+      set bus_route [] 
+      set bus_route lput item random length item current_stop graph item current_stop graph bus_route
+      ]
+    ]    
+    travel-to item 0 bus_route  
+    ; inform other buses with status message
+    let inform_message (list "inform" bus_id item 0 bus_route bus_passengers)
+    foreach bus_list [
+      let to_bus_id ?
+      if to_bus_id != bus_id [
+        send-message to_bus_id inform_message
+      ]
     ]
+    set leave_at_next_stop []
   ]
-  if length request != 0 [
-    send-message to_bus_id (list "request-passengers" request)
-  ]
+  [travel-to next_stop] 
 end
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;                   HELPER FUNCTIONS                    ;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 to-report destination_by_waiting_time [on_bus]
   let destination item 1 item 0 on_bus 
@@ -192,208 +372,10 @@ to-report get_coordinates
   report coordinate_list  
 end
 
-to management
-   ;show workers
-   if (count buses < 4) [
-    add-bus 1
-    add-bus 1
-    add-bus 1
-    ]
-   
-;   if (last_bus_count < count buses)[
-     let temp_man_id manager_id
-     let temp_worker_list workers
-     
-     ask buses [
-       set manager_id temp_man_id
-       
-       let temp_status_list []
-       set temp_status_list lput bus_id temp_status_list
-       set temp_status_list lput current_status temp_status_list
-         ifelse (not member? first temp_status_list map first temp_worker_list)[
-           set temp_worker_list lput temp_status_list temp_worker_list
-         ][
-           let remove-index position first temp_status_list map first temp_worker_list
-           
-           set temp_worker_list replace-item remove-index temp_worker_list temp_status_list
-         
-         ]
-       ]
-     set workers temp_worker_list
-;     ]
-   
-   
-   foreach inbox[
-     let current_message last ?
-     let sender_id item 1 ?
-     if first current_message = "bid"[
-       
-       ;current_message is ["bid" current_stop bid_value passengers_left_behind]
-       
-       ;create incoming bid with familiar netlogo bs
-       ;temp request is [current_stop sender_id bid_value passengers_left_behind]
-       let temp_request []
-       set temp_request lput item 1 current_message temp_request
-       set temp_request lput sender_id temp_request
-       set temp_request lput item 2 current_message temp_request       
-       set temp_request lput last current_message temp_request 
-              
-       ;if incoming bid is less than previous lowest bid replace with incoming bid
-       ;comparing incoming bid to current lowest bid (if there already is one) for this contract
-       ifelse member? item 1 current_message map first request_list[
-           let temp_position position item 1 current_message map first request_list
-           let current_lowest_bid last item temp_position request_list
-           if item 2 temp_request < current_lowest_bid [
-             set request_list replace-item temp_position request_list temp_request
-             ]     
-         ][
-         set request_list lput temp_request request_list
-         ]
-       ]
-
-     if first current_message = "inform"[
-       ;current message is ["inform" current_stop passengers_left_behind]
-         if not member? current_stop signed_contracts[ 
-           send-contracts current_message workers
-         ]       
-       ]
-     
-     if first current_message = "finished"[
-       set signed_contracts remove last current_message signed_contracts
-       ]
-
-     ;set inbox remove ? inbox
-     ]
-   set inbox []
-   if length request_list > 0 [
-     
-   ;request_list is [[current_stop sender_id bid_value passengers_left_behind]...]
-     
-   foreach request_list[
-     let request ?
-     print "REQUEST"
-     print ticks
-     print request
-     let no_passengers last request
-     let bid_val item 2 request
-     let winner item 1 request
-     let winners_message []
-     set winners_message lput "request" winners_message
-     set winners_message lput item 0 request winners_message
-     
-     ;winners_message is ["request" destination_stop]
-     
-     ;calculate the distance a new bus would have to travel to the destination
-     let new_bus_route a_star 3 item 0 request cost_graph bus_stop_coordinates
-     let new_bus_cost calculate-route-length new_bus_route
-     
-     let add_bus_threshold 0
-     
-     ifelse (count buses < 101)[
-         set add_bus_threshold 2
-       
-       ][
-         ifelse(count buses < 201)[
-           set add_bus_threshold 3
-         ][
-           set add_bus_threshold 4
-         ]
-       ]
-
-     
-     ;if the bid winner has a smaller distance to travel to the destination than a new bus would, dont add new bus otherwise add new bus
-     ifelse bid_val < new_bus_cost * add_bus_threshold[  
-       ;if the cost of going to the destination is 0 then the bus was already headed there and had the capacity to pickup the passengers
-       if item 2 request != 0[
-         send-message winner winners_message
-         set signed_contracts lput last request signed_contracts
-         ]
-       ][
-         ifelse(no_passengers < 13)[
-           add-bus 1
-         ][
-           ifelse(no_passengers < 61)[
-             add-bus 2
-           ][
-             add-bus 3 
-           ]
-         ]
-       ] 
-     ]
-     set request_list [] 
-   ]
-   
-end
-
-to send-contracts [contract_message workers_]
-  set contract_message replace-item 0 contract_message "contract"
-  ;contract_message is ["contract" current_stop passengers_left_behind]
-  foreach workers_[
-    ; TO-DO: if worker is not busy
-    let worker ?
-    send-message item 0 worker contract_message
-  ]
-
-end
-
-to default-behaviour
-  ifelse current_stop != -1 [
-    
-    ; Drop-off passengers
-    if(length bus_passengers != 0)[
-      foreach bus_passengers [if (current_stop = item 1 ?) [drop-off-passenger item 0 ?]]  
-    ]
-    
-    ; Pick-up passengers
-    foreach get-passengers-at-stop current_stop [ 
-      ifelse(length bus_passengers < capacity)[ 
-        pick-up-passenger item 0 ? 
-      ][
-        ;count the number of passengers_left behind
-        set passengers_left_behind passengers_left_behind + 1
-      ]
-    ]         
-    if (manager_id != bus_id and manager_id != 0 and passengers_left_behind > 0)[
-          ;a worker informs in message: ["inform" current_stop passengers_left_behind]
-          let inform_message []
-          set inform_message lput "inform" inform_message
-          set inform_message lput current_stop inform_message 
-          set inform_message lput passengers_left_behind inform_message
-          ;let message word word current_stop ":" passengers_left_behind 
-          send-message manager_id inform_message
-          set passengers_left_behind 0
-        ]
-    
-    ; Get bus_route and travel-to next stop
-    ifelse(length bus_route > 1)[
-      set bus_route but-first bus_route
-    ][
-
-      ifelse(length bus_passengers != 0) [
-        ; this ensures that the person that has been on the bus the longest will get priority
-        let destination destination_by_waiting_time bus_passengers
-        set bus_route a_star current_stop destination cost_graph bus_stop_coordinates
-        set bus_route but-first bus_route
-      ][
-      set bus_route [] 
-      set bus_route lput item random length item current_stop graph item current_stop graph bus_route
-      ]
-    ]    
-    travel-to item 0 bus_route  
-    ; inform other buses with status message
-    let status_message (list "inform" bus_id item 0 bus_route bus_passengers)
-    foreach bus_statuses [
-      let bus_status ?
-      send-message item 0 ? status_message
-    ]
-  ]
-  [travel-to next_stop] 
-end
-
 ;to be called by an individual bus
 to-report calculate-pickup-bid [waiting_message]
   
-  ;waiting_message is ["contract" current_stop passengers_left_behind]
+  ;waiting_message is ["contract" current_stop surplus_passengers]
   
   let bid 0
   let available_space capacity - length bus_passengers
