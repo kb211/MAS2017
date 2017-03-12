@@ -95,7 +95,8 @@ to inbox-messages
         set bid_message lput "bid" bid_message
         set bid_message lput item 1 current_message bid_message;this might change when "request" added
         set bid_message lput bid_value bid_message
-        ;bid_message is ["bid" current_stop bid_value]
+        set bid_message lput last current_message bid_message;The number of passengers left behind
+        ;bid_message is ["bid" current_stop bid_value, passengers_left_behind]
         
         send-message manager_id bid_message        
         
@@ -195,7 +196,8 @@ to management
    ;show workers
    if (count buses < 4) [
     add-bus 1
-    ;add-bus 1
+    add-bus 1
+    add-bus 1
     ]
    
 ;   if (last_bus_count < count buses)[
@@ -226,21 +228,22 @@ to management
      let sender_id item 1 ?
      if first current_message = "bid"[
        
-       ;current_message is ["bid" current_stop bid_value]
+       ;current_message is ["bid" current_stop bid_value passengers_left_behind]
        
        ;create incoming bid with familiar netlogo bs
-       ;temp request is [current_stop sender_id bid_value]
+       ;temp request is [current_stop sender_id bid_value passengers_left_behind]
        let temp_request []
        set temp_request lput item 1 current_message temp_request
        set temp_request lput sender_id temp_request
        set temp_request lput item 2 current_message temp_request       
-       
+       set temp_request lput last current_message temp_request 
+              
        ;if incoming bid is less than previous lowest bid replace with incoming bid
        ;comparing incoming bid to current lowest bid (if there already is one) for this contract
        ifelse member? item 1 current_message map first request_list[
            let temp_position position item 1 current_message map first request_list
            let current_lowest_bid last item temp_position request_list
-           if last current_message < current_lowest_bid [
+           if item 2 temp_request < current_lowest_bid [
              set request_list replace-item temp_position request_list temp_request
              ]     
          ][
@@ -264,13 +267,14 @@ to management
    set inbox []
    if length request_list > 0 [
      
-   ;request_list is [[current_stop sender_id bid_value]...]
+   ;request_list is [[current_stop sender_id bid_value passengers_left_behind]...]
      
    foreach request_list[
      let request ?
      print "REQUEST"
      print ticks
      print request
+     let no_passengers last request
      let bid_val item 2 request
      let winner item 1 request
      let winners_message []
@@ -283,16 +287,37 @@ to management
      let new_bus_route a_star 3 item 0 request cost_graph bus_stop_coordinates
      let new_bus_cost calculate-route-length new_bus_route
      
+     let add_bus_threshold 0
+     
+     ifelse (count buses < 101)[
+         set add_bus_threshold 2
+       
+       ][
+         ifelse(count buses < 201)[
+           set add_bus_threshold 3
+         ][
+           set add_bus_threshold 4
+         ]
+       ]
+
+     
      ;if the bid winner has a smaller distance to travel to the destination than a new bus would, dont add new bus otherwise add new bus
-     ifelse bid_val < new_bus_cost * 2[  
+     ifelse bid_val < new_bus_cost * add_bus_threshold[  
        ;if the cost of going to the destination is 0 then the bus was already headed there and had the capacity to pickup the passengers
        if item 2 request != 0[
          send-message winner winners_message
          set signed_contracts lput last request signed_contracts
          ]
        ][
-       add-bus 1
-       
+         ifelse(no_passengers < 13)[
+           add-bus 1
+         ][
+           ifelse(no_passengers < 61)[
+             add-bus 2
+           ][
+             add-bus 3 
+           ]
+         ]
        ] 
      ]
      set request_list [] 
