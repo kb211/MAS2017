@@ -1,0 +1,116 @@
+to-report a_star [start goal dist_list cords]
+  ; create paired list as start of search space: [start, 0]
+  let temp []
+  set temp lput start temp
+  set temp lput 0 temp
+  
+  ; init list of nodes to search from
+  let open_list []
+  set open_list lput temp open_list
+  
+  ; init list to collect path costs
+  let cost_so_far []
+  set cost_so_far lput temp cost_so_far
+  
+  ; init list to collect linked nodes in collected paths
+  let came_from []
+  set temp replace-item 1 temp "None"
+  set came_from lput temp came_from
+  
+  while [length open_list > 0][
+    
+    set open_list sort-by [(runresult task [ item 1 ? ] ?1) < (runresult task [ item 1 ? ] ?2)] open_list
+    let node_current item 0 open_list
+    let current_node item 0 node_current
+    set open_list remove-item 0 open_list
+    
+    ; if path to goal node was found collect and report route
+    if(member? goal map first came_from)[
+        let route []
+        set route fput current_node route
+        while[current_node != start][
+            let link_index position current_node map first came_from
+            set current_node item 1 item link_index came_from
+            set route fput current_node route
+        ]
+        report route
+    ]
+    ;TODO: getting error with item below when -1 ("not greater than 0")    
+    let successors item current_node graph
+    foreach successors [
+      let next_node ?
+      let next_node_index position next_node successors
+
+      ; get cost of path to current_node (i.e. busstop) from cost_so_far list
+      let current_node_index position current_node map first cost_so_far
+      let current_cost item 1 (item current_node_index cost_so_far)
+      
+      ; get distance between current busstop and next_node (i.e. currently evaluated busstop that connects to current_node)
+      let graph_cost item next_node_index (item current_node dist_list)
+      
+      ; compute cost of path to next_node (i.e. currently evaluated busstop that connects to current_node)
+      let new_cost current_cost + graph_cost
+      
+      ; get earlier collected cost of path for next_node (if in cost_so_far)
+      let next_cost 0
+      let next_cost_index 0
+      if member? next_node map first cost_so_far [
+        set next_cost_index position next_node map first cost_so_far
+        set next_cost item 1 (item next_cost_index cost_so_far)
+      ]
+
+      ; if next_cost is the first or lowest cost collected for next_node add to cost_so_far
+      if not member? next_node map first cost_so_far or new_cost < next_cost[
+        
+        ; create paired list: [next_node, new_cost]
+        let next_cost_so_far []
+        set next_cost_so_far lput next_node next_cost_so_far
+        set next_cost_so_far lput new_cost next_cost_so_far    
+        
+        ; add or replace cost of path to next_node to cost_so_far
+        ifelse member? next_node map first cost_so_far [
+          set cost_so_far replace-item next_cost_index cost_so_far next_cost_so_far     
+          ][
+          set cost_so_far lput next_cost_so_far cost_so_far
+          ]
+        
+        ; compute priority for next_node based on cost of path from start node
+        ; and heuristic estimated cost to goal node
+        let priority new_cost + heuristic goal next_node cords
+        
+        ; create paired list: [next_node, priority]
+        let new_open []
+        set new_open lput next_node new_open
+        set new_open lput priority new_open
+        ; add to list of nodes to consider for search
+        set open_list lput new_open open_list
+        
+        ; create paired list: [next_node, current_id]
+        let new_link []
+        set new_link lput next_node new_link
+        set new_link lput current_node new_link  
+        
+        ; if next_node already visited, replace linked origin node     
+        ifelse member? next_node map first came_from [
+          let came_from_index position next_node map first came_from
+          set came_from replace-item came_from_index came_from new_link     
+          ][
+          set came_from lput new_link came_from
+          ]
+      ]
+    ]
+  ]
+end
+
+to-report heuristic [pointA pointB cords]
+  
+  let coordinatesA item pointA cords
+  let XA item 0 coordinatesA
+  let YA item 1 coordinatesA
+  
+  let coordinatesB item pointB cords
+  let XB item 0 coordinatesB
+  let YB item 1 coordinatesB
+    
+  report abs(XA - XB) + abs(YA - YB)
+end
